@@ -1,0 +1,183 @@
+# AIBA POS va DIET-AIBA POS — Windows o'rnatuvchilarini qurish.
+#
+# MUHIM: BU REPODA KOD YO'Q va hech qachon bo'lmaydi. Manba GitLab'da.
+# Bu fayl build paytida kodni GitLab'dan vaqtincha klon qiladi, yig'adi va
+# FAQAT o'rnatuvchini Release'ga qo'yadi. Ish tugagach mashina o'chiriladi —
+# kod GitHub'da qolmaydi.
+#
+# Nega umuman GitHub kerak: Flutter'ning Windows build'i HAQIQIY Windows
+# mashina va Visual Studio talab qiladi ("build windows only supported on
+# Windows hosts"), bizning GitLab runnerlarimiz esa Linux. GitHub bepul
+# Windows mashina beradi.
+#
+# ISHGA TUSHIRISH: Actions → Build → Run workflow.
+
+name: Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref_aiba:
+        description: "AIBA POS — GitLab branch yoki tag"
+        default: main
+      ref_diet:
+        description: "DIET-AIBA POS — GitLab branch yoki tag"
+        default: main
+  repository_dispatch:
+    types: [gitlab-push]
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    strategy:
+      # Biri yiqilsa ikkinchisi baribir chiqsin — ikki restoran bir-biriga
+      # bog'liq emas.
+      fail-fast: false
+      matrix:
+        include:
+          - app: AIBA POS
+            slug: aiba
+            repo: gitlab.aiba.uz/a.asalbayev/Aiba-pos.git
+            user_key: GITLAB_USER
+            token_key: GITLAB_TOKEN
+          - app: DIET-AIBA POS
+            slug: diet
+            repo: gitlab.aiba.uz/a.asalbayev/diet-aiba-pos.git
+            user_key: GITLAB_USER_DIET
+            token_key: GITLAB_TOKEN_DIET
+
+    name: ${{ matrix.app }}
+    steps:
+      # DIQQAT: `actions/checkout` ATAYLAB YO'Q — bu repoda olinadigan kod
+      # yo'q. Manba faqat GitLab'dan keladi.
+      - name: Kodni GitLab'dan olish
+        shell: bash
+        env:
+          U: ${{ secrets[matrix.user_key] }}
+          T: ${{ secrets[matrix.token_key] }}
+          REPO: ${{ matrix.repo }}
+          REF: ${{ matrix.slug == 'diet' && (github.event.inputs.ref_diet || 'main') || (github.event.inputs.ref_aiba || 'main') }}
+        run: |
+          set -e
+          if [ -z "$U" ] || [ -z "$T" ]; then
+            echo "::error::${{ matrix.app }} uchun kalit sozlanmagan — SOZLASH.md ga qarang"
+            exit 1
+          fi
+          git clone --depth 1 --branch "$REF" "https://$U:$T@$REPO" src
+          # Token remote manzilda qolmasin: keyingi qadamlar xato bersa,
+          # log yoki artifaktga tushib ketmasin.
+          git -C src remote set-url origin "https://$REPO"
+          git -C src log --oneline -1
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Windows desktop yoqish
+        run: flutter config --enable-windows-desktop
+
+      - name: Bog'liqliklar
+        working-directory: src
+        run: flutter pub get
+
+      - name: Tekshiruv
+        working-directory: src
+        run: flutter analyze
+
+      - name: Qurish
+        working-directory: src
+        run: flutter build windows --release
+
+      # Flutter MSVC runtime'ni O'ZI nusxalamaydi — buni
+      # windows/CMakeLists.txt qo'shadi. Agar bir kun ishlamay qolsa,
+      # o'rnatuvchi JIM chiqaveradi va ilova mijoz kompyuterida umuman
+      # ochilmaydi (2026-09-11 da mijozda aynan shunday bo'lgan).
+      - name: VC++ runtime joyidami
+        shell: pwsh
+        working-directory: src
+        run: |
+          $dir = "build/windows/x64/runner/Release"
+          $need = @("msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll")
+          $missing = $need | Where-Object { -not (Test-Path (Join-Path $dir $_)) }
+          if ($missing) {
+            Write-Host "Release papkadagi fayllar:"
+            Get-ChildItem $dir | Select-Object -ExpandProperty Name
+            throw "MSVC runtime yetishmaydi: $($missing -join ', ') — toza Windows'da ilova ochilmaydi"
+          }
+          Write-Host "VC++ runtime joyida: $($need -join ', ')"
+
+      # Ikonkasiz Inno «file not found» deb yiqiladi yoki o'rnatuvchi
+      # standart quti rasmi bilan chiqadi.
+      - name: Ikonka joyidami
+        shell: pwsh
+        working-directory: src
+        run: |
+          $ico = "windows/runner/resources/app_icon.ico"
+          if (-not (Test-Path $ico)) { throw "Ikonka topilmadi: $ico" }
+          Write-Host "Ikonka joyida: $ico"
+
+      - name: Inno Setup
+        run: choco install innosetup -y
+
+      # Versiya pubspec'dan — aks holda «Dasturlar va komponentlar»da har
+      # doim 1.0.0 turardi va qaysi build o'rnatilgani bilinmasdi.
+      - name: Versiyani o'qish
+        shell: bash
+        working-directory: src
+        run: echo "VER=$(grep -m1 '^version:' pubspec.yaml | awk '{print $2}' | cut -d+ -f1)" >> "$GITHUB_ENV"
+
+      - name: O'rnatuvchi
+        working-directory: src
+        run: iscc /DAppVersion=${{ env.VER }} windows/installer.iss
+
+      # Artifaktga FAQAT o'rnatuvchi tushadi — manba kodi emas.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-${{ matrix.slug }}
+          path: src/windows/Output/*.exe
+          retention-days: 30
+
+  # Reliz ALOHIDA ish: ikkala build bir vaqtda bitta relizni yozsa, biri
+  # ikkinchisining faylini o'chirib yuborishi mumkin edi.
+  release:
+    needs: [windows]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+      - name: Nima yig'ildi
+        run: ls -R dist
+
+      # Hech bo'lmasa bitta o'rnatuvchi bo'lmasa, relizni YANGILAMAYMIZ —
+      # aks holda ishlab turgan eski havola bo'sh reliz bilan almashardi.
+      - name: Fayl bormi
+        run: |
+          test -n "$(find dist -name '*.exe' -print -quit)" \
+            || { echo "::error::Bitta ham o'rnatuvchi yig'ilmadi — reliz yangilanmadi"; exit 1; }
+
+      # BITTA doimiy «latest» reliz — havola hech qachon o'zgarmaydi.
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: AIBA POS — o'rnatuvchilar
+          files: dist/**/*.exe
+          body: |
+            Windows uchun o'rnatuvchilar. Kerakligini yuklab oling va ishga tushiring.
+
+            * **AIBA-POS-Setup-*.exe** — AIBA POS
+            * **DIET-AIBA-POS-Setup-*.exe** — DIET-AIBA POS
+
+            Ikkalasini bitta kompyuterga o'rnatsa ham bo'ladi — ular
+            bir-biriga xalaqit bermaydi (alohida papka, alohida yorliq).
+
+            O'rnatish: faylni ikki marta bosing. Windows «noma'lum nashriyot»
+            desa — **Batafsil → Baribir ishga tushirish**.
+
+            Build: ${{ github.run_number }} · ${{ github.event.repository.updated_at }}
+          prerelease: false
