@@ -72,6 +72,47 @@ jobs:
           git -C src remote set-url origin "https://$REPO"
           git -C src log --oneline -1
 
+      # PRINTER SKRIPTLARI — HAQIQIY Windows'da sintaksis tekshiruvi.
+      #
+      # Chek chiqarish yo'lining bir qismi PowerShell'da yozilgan (navbatni
+      # tekshirish, portni almashtirish, printerni avtomatik o'rnatish).
+      # Ularni Linux yoki macOS'da ishga tushirib bo'lmaydi — bitta qavs
+      # xatosi faqat kassada, mijozning oldida bilinardi.
+      #
+      # Bu qadam skriptlarni Dart faylidan ajratib olib, Windows'ning O'Z
+      # ajratgichi bilan tekshiradi (ishga TUSHIRMAYDI — faqat o'qiydi).
+      # Xato bo'lsa build shu yerda to'xtaydi.
+      - name: Printer PowerShell skriptlari sintaksisi
+        shell: pwsh
+        run: |
+          $file = "src/lib/features/printing/data/printer_service.dart"
+          if (-not (Test-Path $file)) {
+            Write-Host "::warning::$file topilmadi - tekshiruv o'tkazib yuborildi"
+            exit 0
+          }
+          $src = Get-Content -Raw $file
+          $q3 = [char]39 + [char]39 + [char]39
+          $rx = [regex]("(?s)r" + $q3 + "(.*?)" + $q3)
+          $n = 0
+          $bad = 0
+          foreach ($m in $rx.Matches($src)) {
+            $code = $m.Groups[1].Value
+            if ($code -notmatch 'Get-Print|Set-Printer|Write-Output|Start-Sleep|Get-Service') { continue }
+            $n++
+            $errs = $null
+            [System.Management.Automation.Language.Parser]::ParseInput($code, [ref]$null, [ref]$errs) | Out-Null
+            if ($errs -and $errs.Count -gt 0) {
+              $bad++
+              Write-Host ("::error::Skript #" + $n + " sintaksis xatosi:")
+              foreach ($e in $errs) {
+                Write-Host ("::error::  " + $e.Extent.StartLineNumber + "-qator: " + $e.Message)
+              }
+            }
+          }
+          Write-Host ("Tekshirildi: " + $n + " ta PowerShell skript, xato: " + $bad)
+          if ($n -eq 0) { Write-Host "::warning::Skript topilmadi - regexni tekshiring" }
+          if ($bad -gt 0) { exit 1 }
+
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
