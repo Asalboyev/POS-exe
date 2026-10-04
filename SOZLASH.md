@@ -37,6 +37,17 @@ GitLab'ingizga kira olardi.
 Kalit qo'yilmasa, o'sha ilova build'i «kalit sozlanmagan» deb to'xtaydi —
 ikkinchisi baribir yig'iladi.
 
+## 2b. GitLab quvuri (ixtiyoriy — tezkor signal)
+
+Yuqoridagi to'rtta kalit yetarli: GitHub GitLab'ni **o'zi kuzatadi** va
+o'zgarishni 15 daqiqada payqaydi.
+
+Build **darhol** ketishini xohlasangiz, GitLab tomonda ham bitta
+o'zgaruvchi qo'yiladi: proyekt → **Settings → CI/CD → Variables** →
+`GITHUB_DISPATCH_TOKEN` (masked), qiymati — `repo` huquqli GitHub tokeni.
+Qo'yilmasa quvurdagi `windows-build` ishi ogohlantirish yozib yashil
+o'tadi, build esa kuzatuv orqali baribir bo'ladi.
+
 ## 3. Tekshirish
 
 1. **Actions → Build → Run workflow**.

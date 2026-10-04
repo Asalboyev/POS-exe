@@ -25,12 +25,92 @@ on:
         default: main
   repository_dispatch:
     types: [gitlab-push]
+  # GITLABNI O'ZIMIZ KUZATAMIZ. Ilgari yagona yo'l GitLab quvuridan
+  # `repository_dispatch` kelishi edi — u esa GitLab tomonda
+  # `GITHUB_DISPATCH_TOKEN` o'zgaruvchisini talab qiladi va u sozlanmagani
+  # uchun BIRORTA ham build shu yo'l bilan ishga tushmagan (60 ta ishdan
+  # 0 tasi). Endi har 15 daqiqada GitLab'dagi `main` tekshiriladi: SHA
+  # o'zgargan bo'lsa build ketadi, o'zgarmagan bo'lsa ish 20 soniyada
+  # tugaydi. Reponing o'zi ochiq — daqiqalar bepul.
+  schedule:
+    - cron: "*/15 * * * *"
 
 permissions:
   contents: write
 
+# Ikki build bir vaqtda bitta relizni yozib, bir-birining faylini
+# o'chirib yubormasin.
+concurrency:
+  group: pos-exe-build
+  cancel-in-progress: false
+
 jobs:
+  # GitLab'da yangilik bormi? Qo'lda ishga tushirilganda doim «bor» deb
+  # hisoblanadi; jadval bo'yicha esa oxirgi yig'ilgan SHA bilan solishtiriladi.
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.cmp.outputs.changed }}
+      sha_aiba: ${{ steps.cmp.outputs.sha_aiba }}
+      sha_diet: ${{ steps.cmp.outputs.sha_diet }}
+      record: ${{ steps.cmp.outputs.record }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: cmp
+        shell: bash
+        env:
+          U: ${{ secrets.GITLAB_USER }}
+          T: ${{ secrets.GITLAB_TOKEN }}
+          UD: ${{ secrets.GITLAB_USER_DIET }}
+          TD: ${{ secrets.GITLAB_TOKEN_DIET }}
+          REF_AIBA: ${{ github.event.inputs.ref_aiba || 'main' }}
+          REF_DIET: ${{ github.event.inputs.ref_diet || 'main' }}
+        run: |
+          set -u
+          # Masofadagi shox SHA si. Kalit yo'q yoki GitLab javob bermasa —
+          # bo'sh qaytadi va «o'zgarmagan» deb qabul qilinadi (jadval
+          # bo'yicha ish bekorga Windows mashinani band qilmasin).
+          remote_sha() {
+            local user="$1" token="$2" repo="$3" ref="$4"
+            [ -n "$user" ] && [ -n "$token" ] || { echo ""; return; }
+            git ls-remote "https://$user:$token@$repo" "refs/heads/$ref" 2>/dev/null | cut -f1
+          }
+          A=$(remote_sha "$U"  "$T"  "gitlab.aiba.uz/a.asalbayev/Aiba-pos.git"      "$REF_AIBA")
+          D=$(remote_sha "$UD" "$TD" "gitlab.aiba.uz/a.asalbayev/diet-aiba-pos.git" "$REF_DIET")
+          echo "AIBA POS   $REF_AIBA = ${A:-YOQ}"
+          echo "DIET POS   $REF_DIET = ${D:-YOQ}"
+          PA=""; PD=""
+          if [ -f .state/built.json ]; then
+            PA=$(jq -r '.aiba // ""' .state/built.json)
+            PD=$(jq -r '.diet // ""' .state/built.json)
+          fi
+          echo "Oxirgi yig'ilgan: aiba=${PA:-YOQ} diet=${PD:-YOQ}"
+          # Holatni faqat `main` yig'ilganda yozamiz — qo'lda boshqa shox
+          # yig'ilsa, u `main` o'rnini egallab qolmasin.
+          if [ "$REF_AIBA" = "main" ] && [ "$REF_DIET" = "main" ]; then
+            echo "record=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "record=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "sha_aiba=$A" >> "$GITHUB_OUTPUT"
+          echo "sha_diet=$D" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.event_name }}" != "schedule" ]; then
+            echo "Qo'lda/signal bilan ishga tushirildi — build qilinadi."
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          elif [ -z "$A" ] && [ -z "$D" ]; then
+            echo "::warning::GitLab'dan SHA o'qib bo'lmadi (kalitlar sozlanmaganmi?) — build o'tkazib yuborildi"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          elif [ "$A" != "$PA" ] || [ "$D" != "$PD" ]; then
+            echo "GitLab'da yangilik bor — build ketadi."
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "O'zgarish yo'q — build kerak emas."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
   windows:
+    needs: check
+    if: needs.check.outputs.changed == 'true'
     runs-on: windows-latest
     strategy:
       # Biri yiqilsa ikkinchisi baribir chiqsin — ikki restoran bir-biriga
@@ -185,8 +265,8 @@ jobs:
   # Reliz ALOHIDA ish: ikkala build bir vaqtda bitta relizni yozsa, biri
   # ikkinchisining faylini o'chirib yuborishi mumkin edi.
   release:
-    needs: [windows]
-    if: always()
+    needs: [check, windows]
+    if: always() && needs.check.outputs.changed == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -222,3 +302,33 @@ jobs:
 
             Build: ${{ github.run_number }} · ${{ github.event.repository.updated_at }}
           prerelease: false
+
+  # Yig'ilgan SHA'larni yozib qo'yamiz — keyingi jadval tekshiruvi shu bilan
+  # solishtiradi. Reliz MUVAFFAQIYATLI bo'lgandagina yoziladi: build yiqilsa
+  # SHA yozilib qolib, qayta urinish bo'lmay qolmasin.
+  record:
+    needs: [check, release]
+    if: needs.check.outputs.record == 'true' && needs.release.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      # `ref` SHART: standart checkout detached HEAD qoldiradi va `git push`
+      # «src refspec HEAD does not match any» deb yiqiladi.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+      - shell: bash
+        env:
+          A: ${{ needs.check.outputs.sha_aiba }}
+          D: ${{ needs.check.outputs.sha_diet }}
+        run: |
+          set -e
+          mkdir -p .state
+          printf '{\n  "aiba": "%s",\n  "diet": "%s",\n  "build": "%s",\n  "sana": "%s"\n}\n' \
+            "$A" "$D" "${{ github.run_number }}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > .state/built.json
+          cat .state/built.json
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .state/built.json
+          git diff --cached --quiet && { echo "O'zgarish yo'q"; exit 0; }
+          git commit -m "build ${{ github.run_number }}: yig'ilgan SHA yozildi [skip ci]"
+          git push

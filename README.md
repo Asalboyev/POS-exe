@@ -33,8 +33,16 @@ ularni menejeringiz beradi.
 
 ## Yangi versiya chiqarish
 
-**Actions → Build → Run workflow.** 10–15 daqiqada yuqoridagi sahifada
-yangi o'rnatuvchilar paydo bo'ladi.
+**Hech narsa qilish shart emas.** GitLab'dagi `main` ga push qilsangiz, bu
+yerdagi kuzatuvchi uni **15 daqiqada** payqaydi va o'rnatuvchilarni o'zi
+yig'adi. Yuqoridagi havola o'zgarmaydi — shunchaki yangi fayl paydo bo'ladi.
+
+Darhol kerak bo'lsa: **Actions → Build → Run workflow** — 10–15 daqiqa.
+
+Qanday ishlaydi: har 15 daqiqada ishlaydigan `check` ishi GitLab'dagi `main`
+ning SHA sini o'qiydi va oxirgi yig'ilgani bilan solishtiradi. Teng bo'lsa ish
+20 soniyada tugaydi (Windows mashina umuman band qilinmaydi), farq bo'lsa
+build ketadi. Oxirgi yig'ilgan SHA `.state/built.json` da turadi.
 
 Birinchi marta ishlatishdan oldin kalitlarni sozlash kerak:
 [SOZLASH.md](SOZLASH.md).
