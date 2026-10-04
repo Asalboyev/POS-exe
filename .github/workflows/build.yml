@@ -54,6 +54,8 @@ jobs:
       sha_aiba: ${{ steps.cmp.outputs.sha_aiba }}
       sha_diet: ${{ steps.cmp.outputs.sha_diet }}
       record: ${{ steps.cmp.outputs.record }}
+      prev_aiba: ${{ steps.cmp.outputs.prev_aiba }}
+      prev_diet: ${{ steps.cmp.outputs.prev_diet }}
     steps:
       - uses: actions/checkout@v4
       - id: cmp
@@ -94,19 +96,29 @@ jobs:
           fi
           echo "sha_aiba=$A" >> "$GITHUB_OUTPUT"
           echo "sha_diet=$D" >> "$GITHUB_OUTPUT"
+          # O'QILMAGAN SHA «o'zgargan» DEGANI EMAS. Agar GitLab bir lahzaga
+          # javob bermasa yoki kalit yo'q bo'lsa, bo'sh qiymat chiqadi —
+          # uni «yangilik» deb hisoblasak, har 15 daqiqada bekorga Windows
+          # build ketardi. Shuning uchun bo'sh qiymatli ilova shunchaki
+          # HISOBGA OLINMAYDI.
+          CH=false
+          [ -n "$A" ] && [ "$A" != "$PA" ] && CH=true
+          [ -n "$D" ] && [ "$D" != "$PD" ] && CH=true
+          [ -z "$A" ] && echo "::warning::AIBA POS SHA o'qilmadi — bu ilova tekshiruvdan chetda qoldi"
+          [ -z "$D" ] && echo "::warning::DIET POS SHA o'qilmadi — bu ilova tekshiruvdan chetda qoldi"
           if [ "${{ github.event_name }}" != "schedule" ]; then
             echo "Qo'lda/signal bilan ishga tushirildi — build qilinadi."
             echo "changed=true" >> "$GITHUB_OUTPUT"
-          elif [ -z "$A" ] && [ -z "$D" ]; then
-            echo "::warning::GitLab'dan SHA o'qib bo'lmadi (kalitlar sozlanmaganmi?) — build o'tkazib yuborildi"
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-          elif [ "$A" != "$PA" ] || [ "$D" != "$PD" ]; then
+          elif [ "$CH" = "true" ]; then
             echo "GitLab'da yangilik bor — build ketadi."
             echo "changed=true" >> "$GITHUB_OUTPUT"
           else
             echo "O'zgarish yo'q — build kerak emas."
             echo "changed=false" >> "$GITHUB_OUTPUT"
           fi
+          # Yozib qo'yish uchun: o'qilmagan qiymat eskisini O'CHIRMASIN.
+          echo "prev_aiba=$PA" >> "$GITHUB_OUTPUT"
+          echo "prev_diet=$PD" >> "$GITHUB_OUTPUT"
 
   windows:
     needs: check
@@ -320,8 +332,13 @@ jobs:
         env:
           A: ${{ needs.check.outputs.sha_aiba }}
           D: ${{ needs.check.outputs.sha_diet }}
+          PA: ${{ needs.check.outputs.prev_aiba }}
+          PD: ${{ needs.check.outputs.prev_diet }}
         run: |
           set -e
+          # O'qilmagan SHA eskisini o'chirib yubormasin — aks holda keyingi
+          # tekshiruvda «yangilik» ko'rinib, bekorga build ketardi.
+          A="${A:-$PA}"; D="${D:-$PD}"
           mkdir -p .state
           printf '{\n  "aiba": "%s",\n  "diet": "%s",\n  "build": "%s",\n  "sana": "%s"\n}\n' \
             "$A" "$D" "${{ github.run_number }}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > .state/built.json
