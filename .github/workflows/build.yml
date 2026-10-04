@@ -40,9 +40,15 @@ permissions:
 
 # Ikki build bir vaqtda bitta relizni yozib, bir-birining faylini
 # o'chirib yubormasin.
+#
+# `cancel-in-progress: true` — YANGI push kelsa ESKI build to'xtaydi va
+# yangisi DARHOL boshlanadi. `false` bo'lganda yangisi navbatda kutib
+# turardi: ikki repo ketma-ket push qilinganda foydalanuvchi uzoq vaqt
+# «pending» ko'rib, qotib qolgandek tuyulardi. Eski build'ning kodi
+# baribir eskirgan — uni oxirigacha kutishdan ma'no yo'q.
 concurrency:
   group: pos-exe-build
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   # GitLab'da yangilik bormi? Qo'lda ishga tushirilganda doim «bor» deb
